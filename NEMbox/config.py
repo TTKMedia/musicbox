@@ -26,7 +26,7 @@ class Config(Singleton):
         self._init = True
         self.config_file_path = Constant.config_path
         self.default_config = {
-            'version': 6,
+            'version': 8,
             'cache': {
                 'value': False,
                 'default': False,
@@ -94,6 +94,11 @@ class Config(Singleton):
                 'default': [225, 248, 113],
                 'describe': 'Desktop lyrics RGB Color.'
             },
+            'osdlyrics_size': {
+                'value': [600, 60],
+                'default': [600, 60],
+                'describe': 'Desktop lyrics area size.'
+            },
             'osdlyrics_font': {
                 'value': ['Decorative', 16],
                 'default': ['Decorative', 16],
@@ -109,6 +114,11 @@ class Config(Singleton):
                 'default': True,
                 'describe': 'Desktop lyrics OnTopHint.'
             },
+            'curses_transparency': {
+                'value': False,
+                'default': False,
+                'describe': 'Set true to make curses transparency.'
+            }
         }
         self.config = {}
         if not os.path.isfile(self.config_file_path):
@@ -211,6 +221,20 @@ class Config(Singleton):
                     'value': True,
                     'default': True,
                     'describe': 'Desktop lyrics OnTopHint.'
+                }
+            elif self.config['version'] == 6:
+                self.config['version'] = 7
+                self.config['curses_transparency'] = {
+                    'value': False,
+                    'default': False,
+                    'describe': 'Set true to make curses transparency.'
+                }
+            elif self.config['version'] == 7:
+                self.config['version'] = 8
+                self.config['osdlyrics_size'] = {
+                    'value': [600, 60],
+                    'default': [600, 60],
+                    'describe': 'Desktop lyrics area size.'
                 }
             self.check_version()
             return False

@@ -15,6 +15,7 @@ from builtins import map
 from builtins import open
 from builtins import range
 from builtins import str
+from builtins import pow
 from future import standard_library
 standard_library.install_aliases()
 
@@ -112,7 +113,7 @@ def aesEncrypt(text, secKey):
 
 def rsaEncrypt(text, pubKey, modulus):
     text = text[::-1]
-    rs = pow(int(binascii.hexlify(text), 16), int(pubKey, 16)) % int(modulus, 16)
+    rs = pow(int(binascii.hexlify(text), 16), int(pubKey, 16), int(modulus, 16))
     return format(rs, 'x').zfill(256)
 
 
@@ -248,7 +249,8 @@ class NetEase(object):
         pattern = re.compile(r'^0\d{2,3}\d{7,8}$|^1[34578]\d{9}$')
         if pattern.match(username):
             return self.phone_login(username, password)
-        action = 'https://music.163.com/weapi/login/'
+        action = 'https://music.163.com/weapi/login?csrf_token='
+        self.session.cookies.load()
         text = {
             'username': username,
             'password': password,
