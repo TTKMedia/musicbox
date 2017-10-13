@@ -93,7 +93,7 @@ class Ui(object):
 
     def notify(self, summary, song, album, artist):
         if summary != 'disable':
-            body = '%s\nin %s by %s' % (song, album, artist)
+            body = '%s\n专辑 %s 歌手 %s' % (song, album, artist)
             content = summary + ': ' + body
             notify(content)
 
@@ -638,6 +638,7 @@ class Ui(object):
                     curses.color_pair(1))
         self.screen.refresh()
         info = self.screen.getstr(10, self.startcol, 60)
+        info = info.decode('utf8')
         if info == '':
             return '/return'
         elif info.strip() is '':
