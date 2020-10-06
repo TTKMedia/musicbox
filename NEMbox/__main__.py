@@ -1,21 +1,26 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-网易云音乐 Entry
-"""
-from __future__ import print_function, unicode_literals, division, absolute_import
-import curses
-import traceback
 import argparse
+import curses
 import sys
+import traceback
+from pathlib import Path
 
-from future.builtins import str
+import toml
 
 from .menu import Menu
-from .__version__ import __version__ as version
+
+
+def get_current_version():
+    path = Path(".").parent.parent / "pyproject.toml"
+    with path.open() as f:
+        config = toml.load(f)
+    return config["tool"]["poetry"]["version"]
 
 
 def start():
+    version = get_current_version()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-v", "--version", help="show this version and exit", action="store_true"

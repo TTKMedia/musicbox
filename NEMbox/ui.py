@@ -2,24 +2,25 @@
 # -*- coding: utf-8 -*-
 # @Author: omi
 # @Date:   2014-08-24 21:51:57
+# KenHuang:
+# 1.增加显示颜色自定义；
+# 2.调整显示格式；
 """
 网易云音乐 Ui
 """
-from __future__ import print_function, unicode_literals, division, absolute_import
-
-import hashlib
-import re
 import curses
 import datetime
-
-from future.builtins import range, str, int
-
-from .scrollstring import truelen, scrollstring
-from .storage import Storage
-from .config import Config
+import hashlib
+import os
+import re
+from shutil import get_terminal_size
 
 from . import logger
-from . import terminalsize
+from .config import Config
+from .scrollstring import scrollstring
+from .scrollstring import truelen
+from .scrollstring import truelen_cut
+from .storage import Storage
 
 log = logger.getLogger(__name__)
 
@@ -33,24 +34,39 @@ except ImportError:
     log.warn("Osdlyrics is not available.")
 
 
-def break_str(s, start, max_len=80):
-    length = len(s)
-    i, x = 0, max_len
+def break_substr(s, start, max_len=80):
+    if truelen(s) <= max_len:
+        return s
     res = []
-    while i < length:
-        res.append(s[i : i + max_len])
-        i += x
+    current_truelen = 0
+    start_pos = 0
+    end_pos = 0
+    for c in s:
+        current_truelen += 2 if c > chr(127) else 1
+        if current_truelen > max_len:
+            res.append(s[start_pos:end_pos])
+            current_truelen = 0
+            start_pos = end_pos + 1
+            end_pos += 1
+        else:
+            end_pos += 1
+    try:
+        res.append(s[start_pos:end_pos])
+    except Exception:
+        pass
+    return "\n{}".format(" " * start).join(res)
+
+
+def break_str(s, start, max_len=80):
+    res = []
+    for substr in s.splitlines():
+        res.append(break_substr(substr, start, max_len))
     return "\n{}".format(" " * start).join(res)
 
 
 class Ui(object):
     def __init__(self):
         self.screen = curses.initscr()
-        self.screen.timeout(100)  # the screen refresh every 100ms
-        # charactor break buffer
-        curses.cbreak()
-        self.screen.keypad(1)
-
         curses.start_color()
         if Config().get("curses_transparency"):
             curses.use_default_colors()
@@ -59,24 +75,38 @@ class Ui(object):
             curses.init_pair(3, curses.COLOR_RED, -1)
             curses.init_pair(4, curses.COLOR_YELLOW, -1)
         else:
-            curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
-            curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
-            curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
-            curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+            colors = Config().get("colors")
+            if (
+                "TERM" in os.environ
+                and os.environ["TERM"] == "xterm-256color"
+                and colors
+            ):
+                curses.use_default_colors()
+                for i in range(1, 6):
+                    color = colors["pair" + str(i)]
+                    curses.init_pair(i, color[0], color[1])
+                self.screen.bkgd(32, curses.color_pair(5))
+            else:
+                curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK)
+                curses.init_pair(2, curses.COLOR_CYAN, curses.COLOR_BLACK)
+                curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
+                curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_BLACK)
         # term resize handling
-        size = terminalsize.get_terminal_size()
-        self.x = max(size[0], 10)
-        self.y = max(size[1], 25)
-        self.startcol = int(float(self.x) / 5)
-        self.indented_startcol = max(self.startcol - 3, 0)
+        self.config = Config()
+        size = get_terminal_size()
+        self.x = size[0]
+        self.y = size[1]
+        self.playerX = 1  # terminalsize.get_terminal_size()[1] - 10
+        self.playerY = 0
+        self.update_margin()
         self.update_space()
         self.lyric = ""
         self.now_lyric = ""
         self.post_lyric = ""
         self.now_lyric_index = 0
+        self.now_tlyric_index = 0
         self.tlyric = ""
         self.storage = Storage()
-        self.config = Config()
         self.newversion = False
 
     def addstr(self, *args):
@@ -88,10 +118,32 @@ class Ui(object):
             except Exception as e:
                 log.error(e)
 
+    def update_margin(self):
+        # Left margin
+        self.left_margin_ratio = self.config.get("left_margin_ratio")
+        if self.left_margin_ratio == 0:
+            self.startcol = 0
+        else:
+            self.startcol = max(int(float(self.x) / self.left_margin_ratio), 0)
+        self.indented_startcol = max(self.startcol - 3, 0)
+        # Right margin
+        self.right_margin_ratio = self.config.get("right_margin_ratio")
+        if self.right_margin_ratio == 0:
+            self.endcol = 0
+        else:
+            self.endcol = max(
+                int(float(self.x) - float(self.x) / self.right_margin_ratio),
+                self.startcol + 1,
+            )
+
+        self.indented_endcol = max(self.endcol - 3, 0)
+        self.content_width = self.endcol - self.startcol - 1
+
     def build_playinfo(
         self, song_name, artist, album_name, quality, start, pause=False
     ):
         curses.noecho()
+        curses.curs_set(0)
         # refresh top 2 line
         self.screen.move(1, 1)
         self.screen.clrtoeol()
@@ -106,14 +158,99 @@ class Ui(object):
                 1, self.indented_startcol, "♫  ♪ ♫  ♪ " + quality, curses.color_pair(3)
             )
 
-        self.addstr(
-            1,
-            min(self.indented_startcol + 18, self.x - 1),
-            song_name + self.space + artist + "  < " + album_name + " >",
-            curses.color_pair(4),
-        )
+        song_info = song_name + self.space + artist + "  < " + album_name + " >"
+        if truelen(song_info) <= self.endcol - self.indented_startcol - 19:
+            self.addstr(
+                1,
+                min(self.indented_startcol + 18, self.indented_endcol - 1),
+                song_info,
+                curses.color_pair(4),
+            )
+        else:
+            song_info = scrollstring(song_info + " ", start)
+            self.addstr(
+                1,
+                min(self.indented_startcol + 18, self.indented_endcol - 1),
+                truelen_cut(str(song_info), self.endcol - self.indented_startcol - 19),
+                curses.color_pair(4),
+            )
 
         self.screen.refresh()
+
+    def update_lyrics(self, now_playing, lyrics, tlyrics):
+
+        timestap_regex = r"\d\d:\d\d\.[0-9]*"
+
+        def get_timestap(lyric_line):
+            match_ret = re.match(r"\[(" + timestap_regex + r")\]", lyric_line)
+            if match_ret:
+                return match_ret.group(1)
+            else:
+                return ""
+
+        def get_lyric_time(lyric_line):
+            lyric_timestap = get_timestap(lyric_line)
+            if lyric_timestap == "":
+                return datetime.timedelta(seconds=now_playing)
+            else:
+                return (
+                    datetime.datetime.strptime(get_timestap(lyric_line), "%M:%S.%f")
+                    - datetime.datetime.strptime("00:00", "%M:%S")
+                    - lyric_time_offset
+                )
+
+        def strip_timestap(lyric_line):
+            return re.sub(r"\[" + timestap_regex + r"\]", r"", lyric_line)
+
+        def append_translation(translated_lyric, origin_lyric):
+            translated_lyric = strip_timestap(translated_lyric)
+            origin_lyric = strip_timestap(origin_lyric)
+            if translated_lyric == "" or origin_lyric == "":
+                return translated_lyric + origin_lyric
+            return translated_lyric + " || " + origin_lyric
+
+        if (
+            tlyrics and self.now_tlyric_index >= len(tlyrics) - 1
+        ) or self.now_lyric_index >= len(lyrics) - 1:
+            self.post_lyric = ""
+            return
+
+        lyric_time_offset = datetime.timedelta(seconds=0.5)
+        next_lyric_time = get_lyric_time(lyrics[self.now_lyric_index + 1])
+        # now_lyric_time = get_lyric_time(lyrics[self.now_lyric_index])
+        now_time = datetime.timedelta(seconds=now_playing)
+        while now_time >= next_lyric_time and self.now_lyric_index < len(lyrics) - 2:
+            self.now_lyric_index = self.now_lyric_index + 1
+            next_lyric_time = get_lyric_time(lyrics[self.now_lyric_index + 1])
+
+        if tlyrics:
+            next_tlyric_time = get_lyric_time(tlyrics[self.now_tlyric_index + 1])
+            while (
+                now_time >= next_tlyric_time
+                and self.now_tlyric_index < len(tlyrics) - 2
+            ):
+                self.now_tlyric_index = self.now_tlyric_index + 1
+                next_tlyric_time = get_lyric_time(tlyrics[self.now_tlyric_index + 1])
+
+        if tlyrics:
+            self.now_lyric = append_translation(
+                tlyrics[self.now_tlyric_index], lyrics[self.now_lyric_index]
+            )
+            if (
+                self.now_tlyric_index < len(tlyrics) - 1
+                and self.now_lyric_index < len(lyrics) - 1
+            ):
+                self.post_lyric = append_translation(
+                    tlyrics[self.now_tlyric_index + 1], lyrics[self.now_lyric_index + 1]
+                )
+            else:
+                self.post_lyric = ""
+        else:
+            self.now_lyric = strip_timestap(lyrics[self.now_lyric_index])
+            if self.now_lyric_index < len(lyrics) - 1:
+                self.post_lyric = strip_timestap(lyrics[self.now_lyric_index + 1])
+            else:
+                self.post_lyric = ""
 
     def build_process_bar(
         self, song, now_playing, total_length, playing_flag, playing_mode
@@ -125,24 +262,30 @@ class Ui(object):
         lyrics, tlyrics = song.get("lyric", []), song.get("tlyric", [])
 
         curses.noecho()
+        curses.curs_set(0)
         self.screen.move(3, 1)
         self.screen.clrtoeol()
         self.screen.move(4, 1)
         self.screen.clrtoeol()
         self.screen.move(5, 1)
         self.screen.clrtoeol()
+        self.screen.move(6, 1)
+        self.screen.clrtoeol()
         if total_length <= 0:
             total_length = 1
         if now_playing > total_length or now_playing <= 0:
             now_playing = 0
-        if now_playing == 0:
+        if int(now_playing) == 0:
             self.now_lyric_index = 0
+            if tlyrics:
+                self.now_tlyric_index = 0
             self.now_lyric = ""
             self.post_lyric = ""
         process = "["
-        for i in range(0, 33):
-            if i < now_playing / total_length * 33:
-                if (i + 1) > now_playing / total_length * 33:
+        process_bar_width = self.content_width - 24
+        for i in range(0, process_bar_width):
+            if i < now_playing / total_length * process_bar_width:
+                if (i + 1) > now_playing / total_length * process_bar_width:
                     if playing_flag:
                         process += ">"
                         continue
@@ -151,7 +294,7 @@ class Ui(object):
                 process += " "
         process += "] "
 
-        now = str(datetime.timedelta(seconds=now_playing)).lstrip("0").lstrip(":")
+        now = str(datetime.timedelta(seconds=int(now_playing))).lstrip("0").lstrip(":")
         total = str(datetime.timedelta(seconds=total_length)).lstrip("0").lstrip(":")
         process += "({}/{})".format(now, total)
 
@@ -173,40 +316,9 @@ class Ui(object):
             self.post_lyric = ""
             if dbus_activity and self.config.get("osdlyrics"):
                 self.now_playing = "{} - {}\n".format(name, artist)
-
         else:
-            key = now
-            index = 0
-            for line in lyrics:
-                if key in line:
-                    # 计算下一句歌词，判断刷新时的歌词和上一次是否相同来进行index计算
-                    if not (self.now_lyric == re.sub("\[.*?\]", "", line)):
-                        self.now_lyric_index = self.now_lyric_index + 1
-                    if index < len(lyrics) - 1:
-                        self.post_lyric = lyrics[index + 1]
-                    else:
-                        self.post_lyric = ""
-                    if not tlyrics:
-                        self.now_lyric = line
-                    else:
-                        self.now_lyric = line
-                        for tindex, tline in enumerate(tlyrics):
-                            if key in tline and self.config.get("translation"):
-                                self.now_lyric = tline + " || " + self.now_lyric
-                                if (
-                                    not (self.post_lyric == "")
-                                    and tindex < len(tlyrics) - 1
-                                ):
-                                    self.post_lyric = (
-                                        tlyrics[tindex + 1] + " || " + self.post_lyric
-                                    )
-                                # 此处已经拿到，直接break即可
-                                break
-                    # 此处已经拿到，直接break即可
-                    break
-                index += 1
-        self.now_lyric = re.sub("\[.*?\]", "", self.now_lyric)
-        self.post_lyric = re.sub("\[.*?\]", "", self.post_lyric)
+            self.update_lyrics(now_playing, lyrics, tlyrics)
+
         if dbus_activity and self.config.get("osdlyrics"):
             try:
                 bus = dbus.SessionBus().get_object("org.musicbox.Bus", "/")
@@ -225,14 +337,23 @@ class Ui(object):
         # 根据索引计算双行歌词的显示，其中当前歌词颜色为红色，下一句歌词颜色为白色；
         # 当前歌词从下一句歌词刷新颜色变换，所以当前歌词和下一句歌词位置会交替
         if self.now_lyric_index % 2 == 0:
-            self.addstr(4, self.startcol - 2, str(self.now_lyric), curses.color_pair(3))
-            self.addstr(5, self.startcol + 1, str(self.post_lyric), curses.A_DIM)
+            self.addstr(
+                4, max(self.startcol - 2, 0), str(self.now_lyric), curses.color_pair(3)
+            )
+            self.addstr(
+                5, max(self.startcol + 1, 0), str(self.post_lyric), curses.A_DIM
+            )
         else:
-            self.addstr(4, self.startcol - 2, str(self.post_lyric), curses.A_DIM)
-            self.addstr(5, self.startcol + 1, str(self.now_lyric), curses.color_pair(3))
+            self.addstr(
+                4, max(self.startcol - 2, 0), str(self.post_lyric), curses.A_DIM
+            )
+            self.addstr(
+                5, max(self.startcol + 1, 0), str(self.now_lyric), curses.color_pair(3)
+            )
         self.screen.refresh()
 
     def build_loading(self):
+        curses.curs_set(0)
         self.addstr(7, self.startcol, "享受高品质音乐，loading...", curses.color_pair(1))
         self.screen.refresh()
 
@@ -243,6 +364,7 @@ class Ui(object):
     def build_menu(self, datatype, title, datalist, offset, index, step, start):
         # keep playing info in line 1
         curses.noecho()
+        curses.curs_set(0)
         self.screen.move(7, 1)
         self.screen.clrtobot()
         self.addstr(7, self.startcol, title, curses.color_pair(1))
@@ -257,12 +379,14 @@ class Ui(object):
                     self.addstr(
                         i - offset + 9,
                         self.indented_startcol,
-                        "-> " + str(i) + ". " + datalist[i],
+                        "-> " + str(i) + ". " + datalist[i]["entry_name"],
                         curses.color_pair(2),
                     )
                 else:
                     self.addstr(
-                        i - offset + 9, self.startcol, str(i) + ". " + datalist[i]
+                        i - offset + 9,
+                        self.startcol,
+                        str(i) + ". " + datalist[i]["entry_name"],
                     )
 
         elif datatype == "songs" or datatype == "fmsongs":
@@ -272,10 +396,10 @@ class Ui(object):
                     raise ValueError(datalist)
                 # this item is focus
                 if i == index:
-                    self.addstr(i - offset + 8, 0, " " * self.startcol)
+                    self.addstr(i - offset + 9, 0, " " * self.startcol)
                     lead = "-> " + str(i) + ". "
                     self.addstr(
-                        i - offset + 8,
+                        i - offset + 9,
                         self.indented_startcol,
                         lead,
                         curses.color_pair(2),
@@ -288,9 +412,9 @@ class Ui(object):
                     )
 
                     # the length decides whether to scoll
-                    if truelen(name) < self.x - self.startcol - 1:
+                    if truelen(name) < self.content_width:
                         self.addstr(
-                            i - offset + 8,
+                            i - offset + 9,
                             self.indented_startcol + len(lead),
                             name,
                             curses.color_pair(2),
@@ -298,46 +422,81 @@ class Ui(object):
                     else:
                         name = scrollstring(name + "  ", start)
                         self.addstr(
-                            i - offset + 8,
+                            i - offset + 9,
                             self.indented_startcol + len(lead),
-                            str(name),
+                            truelen_cut(
+                                str(name), self.content_width - len(str(i)) - 2
+                            ),
                             curses.color_pair(2),
                         )
                 else:
-                    self.addstr(i - offset + 8, 0, " " * self.startcol)
+                    self.addstr(i - offset + 9, 0, " " * self.startcol)
                     self.addstr(
-                        i - offset + 8,
+                        i - offset + 9,
                         self.startcol,
-                        "{}. {}{}{}  < {} >".format(
-                            i,
-                            datalist[i]["song_name"],
-                            self.space,
-                            datalist[i]["artist"],
-                            datalist[i]["album_name"],
-                        )[: int(self.x * 2)],
+                        truelen_cut(
+                            "{}. {}{}{}  < {} >".format(
+                                i,
+                                datalist[i]["song_name"],
+                                self.space,
+                                datalist[i]["artist"],
+                                datalist[i]["album_name"],
+                            ),
+                            self.content_width,
+                        ),
                     )
 
-            self.addstr(iter_range - offset + 8, 0, " " * self.x)
+            self.addstr(iter_range - offset + 9, 0, " " * self.x)
 
         elif datatype == "comments":
             # 被选中的评论在最下方显示全部字符，其余评论仅显示一行
             for i in range(offset, min(len(datalist), offset + step)):
-                maxlength = min(int(1.8 * self.startcol), len(datalist[i]))
+                maxlength = min(
+                    self.content_width, truelen(datalist[i]["comment_content"])
+                )
                 if i == index:
                     self.addstr(
-                        20,
+                        i - offset + 9,
+                        self.indented_startcol,
+                        truelen_cut(
+                            "-> "
+                            + str(i)
+                            + ". "
+                            + datalist[i]["comment_content"].splitlines()[0],
+                            self.content_width + len("-> " + str(i)),
+                        ),
+                        curses.color_pair(2),
+                    )
+                    self.addstr(
+                        step + 10,
                         self.indented_startcol,
                         "-> "
                         + str(i)
                         + ". "
-                        + break_str(datalist[i], self.indented_startcol, maxlength),
+                        + datalist[i]["comment_content"].split(":", 1)[0]
+                        + ":",
+                        curses.color_pair(2),
+                    )
+                    self.addstr(
+                        step + 12,
+                        self.startcol + (len(str(i)) + 2),
+                        break_str(
+                            datalist[i]["comment_content"].split(":", 1)[1][1:],
+                            self.startcol + (len(str(i)) + 2),
+                            maxlength,
+                        ),
                         curses.color_pair(2),
                     )
                 else:
                     self.addstr(
                         i - offset + 9,
                         self.startcol,
-                        str(i) + ". " + datalist[i][:maxlength],
+                        truelen_cut(
+                            str(i)
+                            + ". "
+                            + datalist[i]["comment_content"].splitlines()[0],
+                            self.content_width,
+                        ),
                     )
 
         elif datatype == "artists":
@@ -505,7 +664,7 @@ class Ui(object):
                         "-> {}. '{}{}   {}".format(
                             i,
                             (datalist[i][0] + "'").ljust(11),
-                            datalist[i][1],
+                            datalist[i][1].ljust(16),
                             datalist[i][2],
                         ),
                         curses.color_pair(2),
@@ -517,24 +676,28 @@ class Ui(object):
                         "{}. '{}{}   {}".format(
                             i,
                             (datalist[i][0] + "'").ljust(11),
-                            datalist[i][1],
+                            datalist[i][1].ljust(16),
                             datalist[i][2],
                         ),
                     )
 
-            self.addstr(20, 6, "NetEase-MusicBox 基于Python，所有版权音乐来源于网易，本地不做任何保存")
-            self.addstr(21, 10, "按 [G] 到 Github 了解更多信息，帮助改进，或者Star表示支持~~")
+            self.addstr(
+                20, self.startcol, "NetEase-MusicBox 基于Python，所有版权音乐来源于网易，本地不做任何保存"
+            )
+            self.addstr(21, self.startcol, "按 [G] 到 Github 了解更多信息，帮助改进，或者Star表示支持~~")
             self.addstr(22, self.startcol, "Build with love to music by omi")
 
         self.screen.refresh()
 
     def build_login(self):
+        curses.curs_set(0)
         self.build_login_bar()
         account = self.get_account()
         password = hashlib.md5(self.get_password().encode("utf-8")).hexdigest()
         return account, password
 
     def build_login_bar(self):
+        curses.curs_set(0)
         curses.noecho()
         self.screen.move(4, 1)
         self.screen.clrtobot()
@@ -545,6 +708,7 @@ class Ui(object):
         self.screen.refresh()
 
     def build_login_error(self):
+        curses.curs_set(0)
         self.screen.move(4, 1)
         self.screen.timeout(-1)  # disable the screen timeout
         self.screen.clrtobot()
@@ -557,7 +721,20 @@ class Ui(object):
         self.screen.timeout(100)  # restore the screen timeout
         return x
 
+    def build_search_error(self):
+        curses.curs_set(0)
+        self.screen.move(4, 1)
+        self.screen.timeout(-1)
+        self.screen.clrtobot()
+        self.addstr(8, self.startcol, "是不支持的搜索类型呢...", curses.color_pair(3))
+        self.addstr(9, self.startcol, "（在做了，在做了，按任意键关掉这个提示）", curses.color_pair(3))
+        self.screen.refresh()
+        x = self.screen.getch()
+        self.screen.timeout(100)
+        return x
+
     def build_timing(self):
+        curses.curs_set(0)
         self.screen.move(6, 1)
         self.screen.clrtobot()
         self.screen.timeout(-1)
@@ -594,18 +771,18 @@ class Ui(object):
         return keyword.decode("utf-8").strip()
 
     def update_size(self):
+        curses.curs_set(0)
         # get terminal size
-        size = terminalsize.get_terminal_size()
-        x = max(size[0], 10)
-        y = max(size[1], 25)
+        size = get_terminal_size()
+        x = size[0]
+        y = size[1]
         if (x, y) == (self.x, self.y):  # no need to resize
             return
         self.x, self.y = x, y
 
         # update intendations
         curses.resizeterm(self.y, self.x)
-        self.startcol = int(float(self.x) / 5)
-        self.indented_startcol = max(self.startcol - 3, 0)
+        self.update_margin()
         self.update_space()
         self.screen.clear()
         self.screen.refresh()

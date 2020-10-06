@@ -4,19 +4,16 @@
 """
 Class to cache songs into local storage.
 """
-from __future__ import print_function, unicode_literals, division, absolute_import
-import threading
-import subprocess
 import os
 import signal
+import subprocess
+import threading
 
-from future.builtins import str
-
-from .const import Constant
-from .config import Config
-from .singleton import Singleton
-from .api import NetEase
 from . import logger
+from .api import NetEase
+from .config import Config
+from .const import Constant
+from .singleton import Singleton
 
 log = logger.getLogger(__name__)
 
@@ -73,7 +70,7 @@ class Cache(Singleton):
             url = data[3]
             onExit = data[4]
             output_path = Constant.download_dir
-            output_file = str(artist).replace('/', ' ') + " - " + str(song_name) + ".mp3"
+            output_file = str(artist) + " - " + str(song_name) + ".mp3"
             full_path = os.path.join(output_path, output_file)
 
             new_url = NetEase().songs_url([song_id])[0]["url"]

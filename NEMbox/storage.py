@@ -4,11 +4,7 @@
 """
 Class to stores everything into a json file.
 """
-from __future__ import print_function, unicode_literals, division, absolute_import
-
 import json
-
-from future.builtins import open
 
 from .const import Constant
 from .singleton import Singleton

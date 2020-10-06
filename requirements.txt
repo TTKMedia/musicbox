@@ -1,4 +1,0 @@
-requests
-requests-cache
-pycryptodomex
-future

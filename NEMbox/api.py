@@ -5,27 +5,25 @@
 """
 网易云音乐 Api
 """
-from __future__ import print_function, unicode_literals, division, absolute_import
-
 import json
-from collections import OrderedDict
-from http.cookiejar import LWPCookieJar
-from http.cookiejar import Cookie
-
 import platform
 import time
+from collections import OrderedDict
+from http.cookiejar import Cookie
+from http.cookiejar import LWPCookieJar
+
 import requests
 import requests_cache
 
 from .config import Config
 from .const import Constant
-from .storage import Storage
 from .encrypt import encrypted_request
-from . import logger
+from .storage import Storage
+from .logger import getLogger
 
 requests_cache.install_cache(Constant.cache_path, expire_after=3600)
 
-log = logger.getLogger(__name__)
+log = getLogger(__name__)
 
 # 歌曲榜单地址
 TOP_LIST_ALL = {
@@ -302,7 +300,7 @@ class NetEase(object):
 
     @property
     def toplists(self):
-        return [l[0] for l in TOP_LIST_ALL.values()]
+        return [item[0] for item in TOP_LIST_ALL.values()]
 
     def logout(self):
         self.session.cookies.clear()
@@ -316,6 +314,7 @@ class NetEase(object):
         self.storage.save()
 
     def _raw_request(self, method, endpoint, data=None):
+        resp = None
         if method == "GET":
             resp = self.session.get(
                 endpoint, params=data, headers=self.header, timeout=DEFAULT_TIMEOUT
@@ -344,10 +343,10 @@ class NetEase(object):
             discard=False,
             comment=None,
             comment_url=None,
-            rest={},
+            rest=None,
         )
 
-    def request(self, method, path, params={}, default={"code": -1}, custom_cookies={'os':'pc'}):
+    def request(self, method, path, params={}, default={"code": -1}, custom_cookies={}):
         endpoint = "{}{}".format(BASE_URL, path)
         csrf_token = ""
         for cookie in self.session.cookies:
@@ -362,12 +361,13 @@ class NetEase(object):
             self.session.cookies.set_cookie(cookie)
 
         params = encrypted_request(params)
+        resp = None
         try:
             resp = self._raw_request(method, endpoint, params)
             data = resp.json()
         except requests.exceptions.RequestException as e:
             log.error(e)
-        except ValueError as e:
+        except ValueError:
             log.error("Path: {}, response: {}".format(path, resp.text[:200]))
         finally:
             return data
@@ -387,6 +387,7 @@ class NetEase(object):
             params = dict(
                 username=username,
                 password=password,
+                countrycode="86",
                 rememberLogin="true",
                 clientToken=client_token,
             )
